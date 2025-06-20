@@ -1,0 +1,1059 @@
+ubuntu@hotel-management-server:~/hotel-management-frontend$ cat \
+components/RestaurantBillingForm.js \
+components/RoomBillingForm.js \
+components/DashboardLayout.js \
+context/AuthContext.js \
+context/LanguageContext.js \
+hoc/withRoleGuard.js \
+pages/bills/* \
+pages/menu-management.js \
+pages/services.js \
+pages/order-history.js \
+pages/notifications.js \
+utils/api.js \
+utils/axios.js \
+utils/axiosInstance.js
+import { useState, useEffect } from "react";
+import { useAuth } from "@/context/AuthContext";
+import { useLanguage } from "@/context/LanguageContext";
+import toast from "react-hot-toast";
+
+function RestaurantBillingForm() {
+  const { user } = useAuth();
+  const { language } = useLanguage();
+
+  const [items, setItems] = useState([]);
+  const [selectedItems, setSelectedItems] = useState([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [customerName, setCustomerName] = useState("");
+  const [customerPhone, setCustomerPhone] = useState("");
+  const [includeGST, setIncludeGST] = useState(false);
+  const [gstRate, setGstRate] = useState(5); // Default 5%
+
+  useEffect(() => {
+    fetchItems();
+  }, [user]);
+
+  const fetchItems = async () => {
+    try {
+      const res = await fetch("/api/menu/items/", {
+        headers: { Authorization: `Bearer ${user?.access}` },
+      });
+      const data = await res.json();
+      setItems(data);
+    } catch {
+      toast.error("Failed to load items");
+    }
+  };
+
+  const handleItemToggle = (item) => {
+    const exists = selectedItems.find((i) => i.id === item.id);
+    if (exists) {
+      setSelectedItems(selectedItems.filter((i) => i.id !== item.id));
+    } else {
+      setSelectedItems([...selectedItems, { ...item, quantity: 1 }]);
+    }
+  };
+
+  const handleQuantityChange = (id, quantity) => {
+    setSelectedItems((prev) =>
+      prev.map((item) =>
+        item.id === id ? { ...item, quantity: Number(quantity) } : item
+      )
+    );
+  };
+
+  const handleGenerateBill = async () => {
+    if (!customerName || !customerPhone || selectedItems.length === 0) {
+      toast.error("Fill customer details and select items");
+      return;
+    }
+
+    const payload = {
+      customer_name: customerName,
+      customer_phone: customerPhone,
+      items: selectedItems.map((item) => ({
+        item_id: item.id,
+        quantity: item.quantity,
+      })),
+      apply_gst: includeGST,
+    };
+
+    try {
+      const res = await fetch("/api/bills/create/restaurant/", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${user?.access}` },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.gst_rate) setGstRate(data.gst_rate);
+        toast.success("Bill generated");
+        window.location.href = `/admin/bill-history`;
+      } else {
+        toast.error("Error generating bill");
+      }
+    } catch {
+      toast.error("Server error");
+    }
+  };
+
+  const filteredItems = items.filter((item) =>
+    item.name_en?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    item.name_hi?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    item.category?.name?.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const calculateBaseTotal = () =>
+    selectedItems.reduce(
+      (sum, item) => sum + item.price * item.quantity,
+      0
+    );
+
+  const calculateGSTAmount = () => {
+    if (!includeGST) return 0;
+    return (calculateBaseTotal() * (gstRate / 100));
+  };
+
+  const calculateGrandTotal = () => calculateBaseTotal() + calculateGSTAmount();
+
+  return (
+    <div className="p-6 max-w-4xl mx-auto">
+      <h1 className="text-2xl font-bold mb-4">
+        🧾 Restaurant Billing (रेस्टोरेंट बिलिंग)
+      </h1>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+        <input
+          type="text"
+          placeholder="Customer Name (ग्राहक का नाम)"
+          value={customerName}
+          onChange={(e) => setCustomerName(e.target.value)}
+          className="border px-3 py-2 rounded"
+        />
+        <input
+          type="text"
+          placeholder="Phone Number (फोन नंबर)"
+          value={customerPhone}
+          onChange={(e) => setCustomerPhone(e.target.value)}
+          className="border px-3 py-2 rounded"
+        />
+      </div>
+
+      <div className="mb-4">
+        <input
+          type="text"
+          placeholder="🔍 Search items or categories"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="border px-3 py-2 rounded w-full"
+        />
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+        {filteredItems.map((item) => {
+          const isSelected = selectedItems.find((i) => i.id === item.id);
+          return (
+            <div
+              key={item.id}
+              className={`border p-3 rounded shadow-sm ${
+                isSelected ? "bg-green-100" : ""
+              }`}
+              onClick={() => handleItemToggle(item)}
+            >
+              <div className="font-semibold">
+                {language === "hi" ? item.name_hi : item.name_en}
+              </div>
+              <div className="text-sm text-gray-600">
+                ₹{item.price} • {item.category?.name || "No category"}
+              </div>
+              {isSelected && (
+                <input
+                  type="number"
+                  min="1"
+                  value={isSelected.quantity}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={(e) =>
+                    handleQuantityChange(item.id, e.target.value)
+                  }
+                  className="mt-2 border rounded px-2 py-1 w-20"
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="flex items-center mb-4">
+        <input
+          type="checkbox"
+          id="gst"
+          checked={includeGST}
+          onChange={(e) => setIncludeGST(e.target.checked)}
+          className="mr-2"
+        />
+        <label htmlFor="gst" className="text-sm">
+          Include GST ({gstRate}%)
+        </label>
+      </div>
+
+      <div className="text-md font-semibold mb-1">
+        Base Amount (बिना GST): ₹{calculateBaseTotal().toFixed(2)}
+      </div>
+      {includeGST && (
+        <div className="text-md font-semibold mb-1">
+          GST @ {gstRate}% (जीएसटी): ₹{calculateGSTAmount().toFixed(2)}
+        </div>
+      )}
+      <div className="text-xl font-bold mb-4">
+        Total: ₹{calculateGrandTotal().toFixed(2)}
+      </div>
+
+      <button
+        onClick={handleGenerateBill}
+        className="bg-blue-600 text-white px-6 py-2 rounded"
+      >
+        ✅ Generate Bill (बिल बनाएं)
+      </button>
+    </div>
+  );
+}
+
+export default RestaurantBillingForm;
+
+import { useEffect, useState } from "react";
+import { useAuth } from "@/context/AuthContext";
+import toast from "react-hot-toast";
+import { useRouter } from "next/router";
+
+function RoomBillingForm({ role }) {
+  const { user } = useAuth();
+  const router = useRouter();
+
+  const [rooms, setRooms] = useState([]);
+  const [roomId, setRoomId] = useState("");
+  const [days, setDays] = useState(1);
+  const [customerName, setCustomerName] = useState("");
+  const [customerPhone, setCustomerPhone] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("cash");
+  const [applyGst, setApplyGst] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const selectedRoom = rooms.find((r) => r.id == roomId);
+  const subtotal = selectedRoom ? selectedRoom.price_per_day * days : 0;
+
+  // ✅ Dynamic GST rate logic
+  let gstRate = 0;
+  if (applyGst) {
+    if (subtotal < 1000) gstRate = 0;
+    else if (subtotal >= 1000 && subtotal < 7500) gstRate = 0.05;
+    else gstRate = 0.12;
+  }
+
+  const gstAmount = applyGst ? parseFloat((subtotal * gstRate).toFixed(2)) : 0;
+  const total = subtotal + gstAmount;
+
+  useEffect(() => {
+    const fetchRooms = async () => {
+      try {
+        const res = await fetch("/api/rooms/", {
+          headers: { Authorization: `Bearer ${user?.access}` },
+        });
+        const data = await res.json();
+        setRooms(data);
+      } catch {
+        toast.error("Failed to load rooms / कमरे लोड नहीं हो पाए");
+      }
+    };
+
+    if (user?.access) fetchRooms();
+  }, [user]);
+
+  const handleGenerateBill = async () => {
+    if (!roomId || !customerName || !customerPhone || !paymentMethod) {
+      toast.error("All fields are required / सभी फ़ील्ड आवश्यक हैं");
+      return;
+    }
+
+    setLoading(true);
+
+    const res = await fetch("/api/bills/create/room/", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${user?.access}` },
+      body: JSON.stringify({
+        room: roomId,
+        days,
+        customer_name: customerName,
+        customer_phone: customerPhone,
+        payment_method: paymentMethod,
+        apply_gst: applyGst,
+      }),
+    });
+
+    const data = await res.json();
+
+    if (res.ok) {
+      toast.success(`Bill created / बिल बना: ${data.receipt_number}`);
+      router.push(`/bills/${data.bill_id}`);
+    } else {
+      toast.error(data.error || "Failed to create bill / बिल बनाने में विफल");
+    }
+
+    setLoading(false);
+  };
+
+  return (
+    <div className="p-6 max-w-3xl mx-auto">
+      <h1 className="text-2xl font-bold mb-4">
+        {role === "admin"
+          ? "🧾 Admin Room Billing / एडमिन रूम बिलिंग"
+          : "🧾 Staff Room Billing / स्टाफ रूम बिलिंग"}
+      </h1>
+
+      <div className="space-y-4">
+        <input
+          type="text"
+          placeholder="Customer Name / ग्राहक का नाम"
+          value={customerName}
+          onChange={(e) => setCustomerName(e.target.value)}
+          className="border px-3 py-2 rounded w-full"
+        />
+        <input
+          type="text"
+          placeholder="Customer Phone / ग्राहक का मोबाइल"
+          value={customerPhone}
+          onChange={(e) => setCustomerPhone(e.target.value)}
+          className="border px-3 py-2 rounded w-full"
+        />
+        <select
+          value={roomId}
+          onChange={(e) => setRoomId(e.target.value)}
+          className="border px-3 py-2 rounded w-full"
+        >
+          <option value="">-- Select Room / कमरा चुनें --</option>
+          {rooms.map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.type} - ₹{r.price_per_day}/day
+            </option>
+          ))}
+        </select>
+        <input
+          type="number"
+          placeholder="No. of Days / दिनों की संख्या"
+          value={days}
+          min={1}
+          onChange={(e) => setDays(parseInt(e.target.value))}
+          className="border px-3 py-2 rounded w-full"
+        />
+        <select
+          value={paymentMethod}
+          onChange={(e) => setPaymentMethod(e.target.value)}
+          className="border px-3 py-2 rounded w-full"
+        >
+          <option value="cash">Cash / नकद</option>
+          <option value="card">Card / कार्ड</option>
+          <option value="upi">UPI</option>
+          <option value="online">Online / ऑनलाइन</option>
+        </select>
+
+        <div className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={applyGst}
+            onChange={(e) => setApplyGst(e.target.checked)}
+          />
+          <label>
+            Apply GST ({(gstRate * 100).toFixed(0)}%) / जीएसटी लागू करें ({(gstRate * 100).toFixed(0)}%)
+          </label>
+        </div>
+
+        <div className="text-right mt-2">
+          <p className="text-gray-700">Subtotal / उप-योग: ₹{subtotal.toFixed(2)}</p>
+          <p className="text-gray-700">GST: ₹{gstAmount.toFixed(2)}</p>
+          <p className="text-xl font-bold">Total / कुल: ₹{total.toFixed(2)}</p>
+        </div>
+
+        <button
+          onClick={handleGenerateBill}
+          className="bg-green-600 text-white px-4 py-2 rounded mt-4 hover:bg-green-700 disabled:opacity-50"
+          disabled={loading}
+        >
+          {loading
+            ? "Generating... / बना रहे हैं..."
+            : "➕ Generate Room Bill / रूम बिल बनाएं"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export default RoomBillingForm;
+
+// components/DashboardLayout.js
+import { useAuth } from "@/context/AuthContext";
+import { useRouter } from "next/router";
+import { useLanguage } from "@/context/LanguageContext"; // ✅ import language context
+
+export default function DashboardLayout({ children }) {
+  const { logout } = useAuth();
+  const { language, toggleLanguage } = useLanguage(); // ✅ use language hook
+  const router = useRouter();
+
+  return (
+    <div className="min-h-screen bg-gray-100">
+      <header className="bg-white shadow p-4 flex justify-between items-center">
+        <h1 className="text-xl font-bold">
+          🏨 {language === "hi" ? "होटल प्रबंधन प्रणाली" : "Hotel Management System"}
+        </h1>
+        <div className="flex gap-3 items-center">
+          <button
+            onClick={toggleLanguage}
+            className="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600"
+          >
+            {language === "hi" ? "English" : "हिन्दी"}
+          </button>
+          <button
+            onClick={logout}
+            className="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600"
+          >
+            {language === "hi" ? "लॉगआउट" : "Logout"}
+          </button>
+        </div>
+      </header>
+      <main className="p-6">{children}</main>
+    </div>
+  );
+}
+
+import { createContext, useState, useEffect, useContext } from "react";
+import { useRouter } from "next/router";
+import toast from "react-hot-toast";
+
+const AuthContext = createContext();
+
+export const AuthProvider = ({ children }) => {
+  const [user, setUser] = useState(null);
+  const router = useRouter();
+
+  useEffect(() => {
+    const access = localStorage.getItem("access");
+    const refresh = localStorage.getItem("refresh");
+    const email = localStorage.getItem("email");
+    const role = localStorage.getItem("role");
+
+    if (access && refresh && email && role) {
+      const payload = parseJwt(access);
+      const expiry = payload?.exp * 1000;
+
+      if (Date.now() >= expiry) {
+        refreshAccessToken(refresh);
+      } else {
+        setUser({ access, email, role });
+        const timeout = setTimeout(
+          () => refreshAccessToken(refresh),
+          expiry - Date.now() - 1000
+        );
+        return () => clearTimeout(timeout);
+      }
+    }
+  }, []);
+
+  const parseJwt = (token) => {
+    try {
+      return JSON.parse(atob(token.split(".")[1]));
+    } catch (e) {
+      return null;
+    }
+  };
+
+  const refreshAccessToken = async (refreshToken) => {
+    try {
+      const res = await fetch("/api/auth/token/refresh/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh: refreshToken }),
+      });
+
+      if (!res.ok) {
+        logout(); // Refresh failed
+        return;
+      }
+
+      const data = await res.json();
+      const newAccess = data.access;
+      const email = localStorage.getItem("email");
+      const role = localStorage.getItem("role");
+
+      localStorage.setItem("access", newAccess);
+      setUser({ access: newAccess, email, role });
+
+      const payload = parseJwt(newAccess);
+      const nextExpiry = payload.exp * 1000;
+
+      const timeout = setTimeout(
+        () => refreshAccessToken(refreshToken),
+        nextExpiry - Date.now() - 1000
+      );
+      return () => clearTimeout(timeout);
+    } catch (err) {
+      console.error("Failed to refresh token:", err);
+      logout();
+    }
+  };
+
+  const login = async (email, password) => {
+    try {
+      const res = await fetch("/api/auth/token/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+
+      if (!res.ok) {
+        toast.error("Invalid email or password!");
+        throw new Error("Invalid credentials");
+      }
+
+      const data = await res.json();
+      const { access, refresh, email: userEmail, role } = data;
+
+      localStorage.setItem("access", access);
+      localStorage.setItem("refresh", refresh);
+      localStorage.setItem("email", userEmail);
+      localStorage.setItem("role", role);
+
+      setUser({ access, email: userEmail, role });
+
+      if (role === "admin") {
+        router.push("/admin/dashboard");
+      } else if (role === "staff") {
+        router.push("/staff/dashboard");
+      } else {
+        toast.error("Unknown user role.");
+        router.push("/login");
+      }
+    } catch (err) {
+      console.error("Login error:", err);
+      toast.error("Login failed. Please try again.");
+    }
+  };
+
+  const logout = async () => {
+    const refresh = localStorage.getItem("refresh");
+
+    if (refresh) {
+      try {
+        await fetch("/api/users/logout/", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${localStorage.getItem("access")}`,
+          },
+          body: JSON.stringify({ refresh }),
+        });
+      } catch (err) {
+        console.warn("Logout API call failed, continuing with local cleanup.");
+      }
+    }
+
+    localStorage.clear();
+    setUser(null);
+    router.push("/login");
+  };
+
+  return (
+    <AuthContext.Provider value={{ user, login, logout }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+export const useAuth = () => useContext(AuthContext);
+
+import { createContext, useContext, useState } from "react";
+
+const LanguageContext = createContext();
+
+export const LanguageProvider = ({ children }) => {
+  const [language, setLanguage] = useState("en"); // default to English
+
+  const toggleLanguage = () => {
+    setLanguage((prev) => (prev === "en" ? "hi" : "en"));
+  };
+
+  return (
+    <LanguageContext.Provider value={{ language, toggleLanguage }}>
+      {children}
+    </LanguageContext.Provider>
+  );
+};
+
+export const useLanguage = () => useContext(LanguageContext);
+
+// hoc/withRoleGuard.js
+import { useAuth } from "@/context/AuthContext";
+import { useRouter } from "next/router";
+import { useEffect, useState } from "react";
+
+const withRoleGuard = (Component, allowedRoles) => {
+  return function RoleProtectedComponent(props) {
+    const { user } = useAuth();
+    const router = useRouter();
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+      const token = localStorage.getItem("access");
+      const role = localStorage.getItem("role");
+
+      if (!token || !role || !allowedRoles.includes(role)) {
+        router.replace("/unauthorized");
+      } else {
+        setLoading(false);
+      }
+    }, [router]);
+
+    if (loading || !user || !allowedRoles.includes(user.role)) {
+      return <p className="text-center mt-10 text-gray-500">Loading...</p>;
+    }
+
+    return <Component {...props} />;
+  };
+};
+
+export default withRoleGuard;
+
+import { useRouter } from "next/router";
+import { useEffect, useState } from "react";
+import QRCode from "react-qr-code";
+import { useAuth } from "@/context/AuthContext";
+import withRoleGuard from "@/hoc/withRoleGuard";
+
+function BillDetail() {
+  const router = useRouter();
+  const { id } = router.query;
+  const { user } = useAuth();
+  const [bill, setBill] = useState(null);
+
+  useEffect(() => {
+    if (id && user?.access) {
+      fetch(`/api/bills/${id}/`, {
+        headers: { Authorization: `Bearer ${user.access}` },
+      })
+        .then((res) => res.json())
+        .then((data) => setBill(data))
+        .catch((err) => console.error("Error loading bill:", err));
+    }
+  }, [id, user]);
+
+  const handlePrint = () => window.print();
+
+  if (!bill) {
+    return <p className="p-4">Loading bill details...</p>;
+  }
+
+  const billUrl = `${process.env.NEXT_PUBLIC_API_URL.replace("/api", "")}/bills/${id}`;
+
+  const subtotal = bill.items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const gst = parseFloat((bill.total_amount - subtotal).toFixed(2));
+
+  return (
+    <div className="max-w-3xl mx-auto my-8 p-6 border rounded shadow bg-white print:bg-white print:shadow-none print:p-0 print:m-0">
+      <div className="flex justify-between items-center mb-6 print:hidden">
+        <h1 className="text-2xl font-bold">Bill Details</h1>
+        <button
+          onClick={handlePrint}
+          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+        >
+          Print
+        </button>
+      </div>
+
+      <div className="mb-4">
+        <p><strong>Receipt #:</strong> {bill.receipt_number}</p>
+        <p><strong>Customer:</strong> {bill.customer_name} ({bill.customer_phone})</p>
+        <p><strong>Date:</strong> {new Date(bill.created_at).toLocaleString()}</p>
+        <p><strong>Type:</strong> {bill.bill_type}</p>
+      </div>
+
+      <div className="mb-4">
+        <h2 className="text-lg font-semibold mb-2">Items</h2>
+        <table className="w-full border border-gray-300">
+          <thead>
+            <tr className="bg-gray-100">
+              <th className="p-2 border">Item</th>
+              <th className="p-2 border">Qty</th>
+              <th className="p-2 border">Price</th>
+              <th className="p-2 border">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {bill.items.map((item, idx) => (
+              <tr key={idx}>
+                <td className="p-2 border">{item.name}</td>
+                <td className="p-2 border">{item.quantity}</td>
+                <td className="p-2 border">₹{item.price}</td>
+                <td className="p-2 border">₹{item.price * item.quantity}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="mb-4 text-right">
+        <p>Subtotal: ₹{subtotal.toFixed(2)}</p>
+        {gst > 0 && <p>GST (5%): ₹{gst.toFixed(2)}</p>}
+        <p className="text-lg font-bold">Grand Total: ₹{bill.total_amount.toFixed(2)}</p>
+      </div>
+
+      {/* QR code - hide in print */}
+      <div className="mt-6 text-center print:hidden">
+        <p className="mb-2 text-sm text-gray-500">Scan to view bill online</p>
+        <div className="inline-block bg-white p-2 border rounded">
+          <QRCode value={billUrl} size={128} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default withRoleGuard(BillDetail, ["admin", "staff"]);
+
+// pages/menu-management.js
+import { useState, useEffect } from "react";
+
+export default function MenuManagement() {
+  const [menuItems, setMenuItems] = useState([]);
+
+  useEffect(() => {
+    // Placeholder for fetching from backend
+    const dummyData = [
+      { id: 1, name: "Paneer Butter Masala", price: 250 },
+      { id: 2, name: "Chicken Biryani", price: 300 },
+      { id: 3, name: "Tandoori Roti", price: 20 },
+    ];
+    setMenuItems(dummyData);
+  }, []);
+
+  return (
+    <div className="flex">
+      <div className="w-64 h-screen bg-blue-900 text-white p-5">
+        <h2 className="text-2xl font-bold mb-6">Admin Panel</h2>
+        <ul>
+          <li className="mb-4"><a href="/dashboard">Dashboard</a></li>
+          <li className="mb-4 font-bold underline"><a href="/menu-management">Menu Management</a></li>
+          <li className="mb-4"><a href="/order-history">Order History</a></li>
+          <li><a href="/notifications">Notifications</a></li>
+        </ul>
+      </div>
+
+      <main className="flex-1 p-6 bg-gray-100">
+        <h1 className="text-3xl font-bold mb-4">Menu Management</h1>
+        <table className="w-full table-auto bg-white shadow-md rounded-lg overflow-hidden">
+          <thead className="bg-blue-200">
+            <tr>
+              <th className="text-left p-3">#</th>
+              <th className="text-left p-3">Item Name</th>
+              <th className="text-left p-3">Price</th>
+              <th className="text-left p-3">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {menuItems.map((item, index) => (
+              <tr key={item.id} className="border-b hover:bg-gray-100">
+                <td className="p-3">{index + 1}</td>
+                <td className="p-3">{item.name}</td>
+                <td className="p-3">₹{item.price}</td>
+                <td className="p-3 text-blue-600">
+                  <button className="mr-3 hover:underline">Edit</button>
+                  <button className="text-red-600 hover:underline">Delete</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </main>
+    </div>
+  );
+}
+
+// hotel-management-frontend/pages/services.js
+
+import { useEffect, useState } from "react";
+import { useRouter } from "next/router";
+import { useAuth } from "../context/AuthContext";
+
+export default function Services() {
+  const { user, token, loading } = useAuth();
+  const router = useRouter();
+  const [rooms, setRooms] = useState([]);
+  const [menuItems, setMenuItems] = useState([]);
+
+  useEffect(() => {
+    if (!loading && (!user || !["admin", "employee"].includes(user.role))) {
+      router.push("/login");
+    }
+  }, [loading, user]);
+
+  const fetchServices = async () => {
+    try {
+      const headers = {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      };
+
+      const [roomRes, menuRes] = await Promise.all([
+        fetch("/api/rooms/", { headers }),
+        fetch("/api/menu/", { headers }),
+      ]);
+
+      if (!roomRes.ok || !menuRes.ok) {
+        throw new Error("Failed to fetch services.");
+      }
+
+      const roomData = await roomRes.json();
+      const menuData = await menuRes.json();
+
+      setRooms(roomData);
+      setMenuItems(menuData);
+    } catch (err) {
+      console.error("Service fetch error:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (token) fetchServices();
+  }, [token]);
+
+  if (loading || !user) return <div className="p-6">Loading...</div>;
+
+  return (
+    <div className="p-6 bg-gray-100 min-h-screen">
+      <h1 className="text-2xl font-bold text-gray-800 mb-6">Available Services</h1>
+
+      {/* Rooms */}
+      <div className="mb-8">
+        <h2 className="text-xl font-semibold text-indigo-700 mb-4">Available Rooms</h2>
+        <div className="grid md:grid-cols-3 gap-4">
+          {rooms.map((room) => (
+            <div key={room.id} className="bg-white p-4 rounded shadow">
+              <h3 className="text-lg font-semibold">{room.room_type}</h3>
+              <p className="text-gray-600">Price: ₹{room.price_per_night}</p>
+              <p className="text-sm text-green-600">
+                {room.is_available ? "Available" : "Occupied"}
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Menu */}
+      <div>
+        <h2 className="text-xl font-semibold text-indigo-700 mb-4">Restaurant Menu</h2>
+        <div className="grid md:grid-cols-3 gap-4">
+          {menuItems.map((item) => (
+            <div key={item.id} className="bg-white p-4 rounded shadow">
+              <h3 className="text-lg font-semibold">{item.name}</h3>
+              <p className="text-gray-600">Category: {item.category}</p>
+              <p className="text-gray-800 font-bold">₹{item.price}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// pages/order-history.js
+import React, { useState } from "react";
+
+const mockOrders = [
+  {
+    id: "BILL-1001",
+    room: "101",
+    date: "2025-04-04",
+    status: "Paid",
+    amount: 1240.0,
+  },
+  {
+    id: "BILL-1002",
+    room: "202",
+    date: "2025-04-03",
+    status: "Unpaid",
+    amount: 845.0,
+  },
+  {
+    id: "BILL-1003",
+    room: "305",
+    date: "2025-04-02",
+    status: "Paid",
+    amount: 1999.0,
+  },
+];
+
+export default function OrderHistory() {
+  const [query, setQuery] = useState("");
+
+  const filteredOrders = mockOrders.filter((order) =>
+    order.id.toLowerCase().includes(query.toLowerCase()) ||
+    order.room.includes(query)
+  );
+
+  return (
+    <div className="flex">
+      {/* Sidebar */}
+      <div className="w-64 h-screen bg-blue-900 text-white p-5">
+        <h2 className="text-2xl font-bold mb-6">Admin Panel</h2>
+        <ul>
+          <li className="mb-4"><a href="/dashboard">Dashboard</a></li>
+          <li className="mb-4"><a href="/menu-management">Menu Management</a></li>
+          <li className="mb-4 font-bold underline"><a href="/order-history">Order History</a></li>
+          <li className="mb-4"><a href="/notifications">Notifications</a></li>
+        </ul>
+      </div>
+
+      {/* Main Content */}
+      <main className="flex-1 p-6 bg-gray-100">
+        <h1 className="text-3xl font-bold mb-6">Order / Bill History</h1>
+
+        {/* Search bar */}
+        <div className="mb-6">
+          <input
+            type="text"
+            placeholder="Search by Bill ID or Room No"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="p-3 w-full border rounded shadow"
+          />
+        </div>
+
+        {/* Orders Table */}
+        <div className="overflow-x-auto">
+          <table className="w-full bg-white rounded shadow">
+            <thead>
+              <tr className="bg-blue-100 text-left">
+                <th className="p-3">Bill ID</th>
+                <th className="p-3">Room</th>
+                <th className="p-3">Date</th>
+                <th className="p-3">Amount</th>
+                <th className="p-3">Status</th>
+                <th className="p-3">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredOrders.length > 0 ? (
+                filteredOrders.map((order) => (
+                  <tr key={order.id} className="border-t hover:bg-gray-50">
+                    <td className="p-3">{order.id}</td>
+                    <td className="p-3">{order.room}</td>
+                    <td className="p-3">{order.date}</td>
+                    <td className="p-3">₹ {order.amount.toFixed(2)}</td>
+                    <td className="p-3">
+                      <span
+                        className={`px-2 py-1 text-sm rounded ${
+                          order.status === "Paid" ? "bg-green-200 text-green-700" : "bg-red-200 text-red-700"
+                        }`}
+                      >
+                        {order.status}
+                      </span>
+                    </td>
+                    <td className="p-3">
+                      <a href="#" className="text-blue-600 hover:underline">View</a>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan="6" className="text-center p-6 text-gray-500">
+                    No records found.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </main>
+    </div>
+  );
+}
+
+// pages/notifications.js
+import React from "react";
+
+export default function Notifications() {
+  return (
+    <div className="flex">
+      {/* Sidebar */}
+      <div className="w-64 h-screen bg-blue-900 text-white p-5">
+        <h2 className="text-2xl font-bold mb-6">Admin Panel</h2>
+        <ul>
+          <li className="mb-4"><a href="/dashboard">Dashboard</a></li>
+          <li className="mb-4"><a href="/menu-management">Menu Management</a></li>
+          <li className="mb-4"><a href="/order-history">Order History</a></li>
+          <li className="mb-4 font-bold underline"><a href="/notifications">Notifications</a></li>
+        </ul>
+      </div>
+
+      {/* Main Content */}
+      <main className="flex-1 p-6 bg-gray-100">
+        <h1 className="text-3xl font-bold mb-6">Notifications</h1>
+
+        <div className="space-y-4">
+          <div className="bg-white rounded p-4 shadow border-l-4 border-blue-600">
+            <p className="text-lg font-semibold">New order received from Room 102 🍽️</p>
+            <p className="text-sm text-gray-500">2025-04-04 10:45 AM</p>
+          </div>
+
+          <div className="bg-white rounded p-4 shadow border-l-4 border-green-600">
+            <p className="text-lg font-semibold">Payment successful for order #4523 💳</p>
+            <p className="text-sm text-gray-500">2025-04-03 06:22 PM</p>
+          </div>
+
+          <div className="bg-white rounded p-4 shadow border-l-4 border-yellow-500">
+            <p className="text-lg font-semibold">Room 205 checkout completed 🛏️</p>
+            <p className="text-sm text-gray-500">2025-04-03 11:00 AM</p>
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
+
+import axios from './axiosInstance';
+
+export const fetchOrderSummary = () => axios.get('/api/admin/dashboard/summary/');
+export const fetchSalesOverview = () => axios.get('/api/admin/dashboard/revenue/');
+export const fetchBestSellingItems = () => axios.get('/api/admin/dashboard/best-selling/');
+
+import axios from 'axios';
+
+const instance = axios.create({
+  baseURL: process.env.NEXT_PUBLIC_API_BASE_URL || 'https://your-backend-domain/api',
+  withCredentials: true,
+});
+
+export default instance;
+
+import axios from "axios";
+
+const instance = axios.create({
+  baseURL: process.env.NEXT_PUBLIC_API_URL,
+});
+
+instance.interceptors.request.use((config) => {
+  if (typeof window !== "undefined") {
+    const token = localStorage.getItem("token");
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+  }
+  return config;
+});
+
+export default instance;
+
+ubuntu@hotel-management-server:~/hotel-management-frontend$
